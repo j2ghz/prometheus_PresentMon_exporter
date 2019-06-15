@@ -4,12 +4,14 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Prometheus.Client;
-using Prometheus.Client.MetricPusher;
+using Prometheus.Client.MetricServer;
 
 namespace PresentMonToPrometheus
 {
     public class Program
     {
+        private const string prefix = "presentmon_";
+
         // 0 Application,
         // 1 ProcessID,
         // 2 SwapChainAddress,
@@ -21,7 +23,7 @@ namespace PresentMonToPrometheus
         private static readonly string[] labels =
         {
             "Application",
-            "ProcessID",
+            "ProcessID"
             //"SwapChainAddress",
             //"Runtime",
             //"SyncInterval",
@@ -31,30 +33,35 @@ namespace PresentMonToPrometheus
         };
 
         // 8 Dropped,
-        private readonly Counter dropped = Metrics.CreateCounter("Dropped", "", false, labels);
-
-        //11 MsBetweenDisplayChange,
-        private readonly Counter msBetweenDisplayChange =
-            Metrics.CreateCounter("MsBetweenDisplayChange", "", false, labels);
-
-        //10 MsBetweenPresents,
-        private readonly Counter msBetweenPresents = Metrics.CreateCounter("MsBetweenPresents", "", false, labels);
-
-        //12 MsInPresentAPI,
-        private readonly Counter msInPresentAPI = Metrics.CreateCounter("MsInPresentAPI", "", false, labels);
-
-        //14 MsUntilDisplayed
-        private readonly Counter msUntilDisplayed = Metrics.CreateCounter("MsUntilDisplayed", "", false, labels);
-
-        //13 MsUntilRenderComplete,
-        private readonly Counter msUntilRenderComplete =
-            Metrics.CreateCounter("MsUntilRenderComplete", "", false, labels);
-
-        // 9 TimeInSeconds,
-        private readonly Gauge timeInSeconds = Metrics.CreateGauge("TimeInSeconds", "", false, labels);
+        private readonly CounterInt64 dropped = Metrics.CreateCounterInt64(prefix + "frames_dropped", "Number of dropped frames", true, labels);
 
         private readonly Counter frames =
-            Metrics.CreateCounter("frames", "", false, labels);
+            Metrics.CreateCounter(prefix + "frames_count", "Frame counter (experimental)", true, labels);
+
+        //11 MsBetweenDisplayChange,
+        private readonly Histogram msBetweenDisplayChange =
+            Metrics.CreateHistogram(prefix + "frametimes_display_between_ms", "MsBetweenDisplayChange", true, labels);
+
+        //10 MsBetweenPresents,
+        private readonly Histogram msBetweenPresents =
+            Metrics.CreateHistogram(prefix + "frametimes_present_between_ms", "MsBetweenPresents", true, labels);
+
+        //12 MsInPresentAPI,
+        private readonly Histogram msInPresentAPI = Metrics.CreateHistogram(prefix + "frametimes_present_API_time_ms", "MsInPresentAPI", true, labels);
+
+        //14 MsUntilDisplayed
+        private readonly Histogram msUntilDisplayed =
+            Metrics.CreateHistogram(prefix + "frametimes_display_delay_ms", "MsUntilDisplayed", true, labels);
+
+        //13 MsUntilRenderComplete,
+        private readonly Histogram msUntilRenderComplete =
+            Metrics.CreateHistogram(prefix + "frametimes_render_time_ms", "MsUntilRenderComplete", true, labels);
+
+        // 9 TimeInSeconds,
+        private readonly Gauge timeInSeconds = Metrics.CreateGauge(prefix + "raw_TimeInSeconds", "TimeInSeconds", true, labels);
+
+        private IMetricServer metricServer =
+            new MetricServer(Metrics.DefaultCollectorRegistry, new MetricServerOptions {Port = 9091});
 
         public static async Task Main(string[] args)
         {
@@ -85,8 +92,8 @@ namespace PresentMonToPrometheus
 
         public async Task Run(TextReader input, CancellationToken cancellationToken)
         {
+            metricServer.Start();
             await input.ReadLineAsync();
-            var pusher = new MetricPusher("http://192.168.0.2:9091", "PresentMon",Environment.MachineName);
 
             while (true)
             {
@@ -101,9 +108,8 @@ namespace PresentMonToPrometheus
                 {
                     Console.Error.WriteLine($"Couldn't parse line: '{line}'\n{ex.ToStringDemystified()}");
                 }
-                await pusher.PushAsync();
             }
-
+            metricServer.Stop();
         }
 
         private void updateMetrics(string[] fields)
@@ -111,13 +117,13 @@ namespace PresentMonToPrometheus
             var labelValues = fields[..2];
 
             frames.Labels(labelValues).Inc();
-            dropped.Labels(labelValues).Inc(double.Parse(fields[8]));
+            dropped.Labels(labelValues).Inc(long.Parse(fields[8]));
             timeInSeconds.Labels(labelValues).Set(double.Parse(fields[9]));
-            msBetweenPresents.Labels(labelValues).Inc(double.Parse(fields[10]));
-            msBetweenDisplayChange.Labels(labelValues).Inc(double.Parse(fields[11]));
-            msInPresentAPI.Labels(labelValues).Inc(double.Parse(fields[12]));
-            msUntilRenderComplete.Labels(labelValues).Inc(double.Parse(fields[13]));
-            msUntilDisplayed.Labels(labelValues).Inc(double.Parse(fields[14]));
+            msBetweenPresents.Labels(labelValues).Observe(double.Parse(fields[10]));
+            msBetweenDisplayChange.Labels(labelValues).Observe(double.Parse(fields[11]));
+            msInPresentAPI.Labels(labelValues).Observe(double.Parse(fields[12]));
+            msUntilRenderComplete.Labels(labelValues).Observe(double.Parse(fields[13]));
+            msUntilDisplayed.Labels(labelValues).Observe(double.Parse(fields[14]));
         }
     }
 }
